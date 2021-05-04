@@ -1,5 +1,3 @@
-//THIS IS COLORCHECK.CPP
-
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -40,6 +38,9 @@ class color3
 public:
     color3() { x = 0.0f; y = 0.0f; z = 0.0f; }
     color3(const float v) { x = v; y = v; z = v; }
+    color3(const float* v) {x = v[0]; y = v[1]; z = v[2];}
+    color3(const std::vector<float> v) {x = v[0]; y = v[1]; z = v[2];}
+    color3(const std::array<float, 3> v) {x = v[0]; y = v[1]; z = v[2];}
     color3(const float _x, const float _y, const float _z) { x = _x; y = _y; z = _z; }
     color3 operator+(const color3& c)const{ return {x + c.x, y + c.y, z + c.z}; }
     color3 operator*(const color3& c)const{ return {x * c.x, y * c.y, z * c.z}; }
@@ -312,6 +313,7 @@ class image
 public:
     image()             { mWidth = 0; mHeight = 0; }
     image(const int width, const int height) { allocate(width, height); }
+
     image operator+(const image& im){   image temp= im;
     if(im.mPixels.size()!=this->mPixels.size())
         return image();
@@ -347,6 +349,7 @@ public:
     int                 mWidth = 0;
     int                 mHeight = 0;
     std::vector<color3> mPixels;
+    
 };
 
 bool image::load(const char* filename)
@@ -538,27 +541,30 @@ void image::huntAdjustment()
 void image::preprocessVec(std::pair<std::vector<color3>,std::vector<color3> >& filter)     // implements spatial filter and Hunt adjustment
 {
     // convolve with CSF filters
-    const image inputImage = *this;              // copy the input image
+    const image &inputImage = *this;              // copy the input image
     
     image outputImage1;
     image outputImage2;
-    outputImage1.allocate(inputImage.mWidth,inputImage.mHeight);
-    outputImage2.allocate(inputImage.mWidth,inputImage.mHeight);
-    /*
-    printf("prim");
-    printfilter(filter.first);
-    printf("Sec");
-    printfilter(filter.second);*/
-    //#pragma omp parallel num_threads(2) 
+    #pragma omp parallel num_threads(4)
     {
-    //#pragma omp single nowait
+        #pragma omp single nowait
+        {outputImage1.allocate(inputImage.mWidth,inputImage.mHeight);}
+        #pragma omp single nowait
+        {outputImage2.allocate(inputImage.mWidth,inputImage.mHeight);}
+
+    
+    {
+    {
+		#pragma omp barrier
+	}
+    #pragma omp single nowait
     {
     convolve2DSeparable3ChannelsVec(    inputImage.mPixels,         outputImage1.mPixels,
                                         inputImage.mWidth,          inputImage.mHeight, 
                                         filter.first,               filter.first.size(), 
                                         filter.first,               filter.first.size() );
     }
-    //#pragma omp single nowait
+    #pragma omp single nowait
     {
     convolve2DSeparable3ChannelsVec(    inputImage.mPixels,         outputImage2.mPixels, 
                                         inputImage.mWidth,          inputImage.mHeight, 
@@ -566,12 +572,13 @@ void image::preprocessVec(std::pair<std::vector<color3>,std::vector<color3> >& f
                                         filter.second,              filter.second.size() );
     }
     }
-    //#pragma omp barrier
+    {
+		#pragma omp barrier
+	}
     
     
     // the result after the spatial filter is in YCxCz. Clamp and transform this->mPixels to L*a*b
-    //#pragma omp for
-    
+    #pragma omp for
     for (int i = 0 ; i < this->mPixels.size(); i++){
         color3 pixel= outputImage1.mPixels[i] + outputImage2.mPixels[i];
         pixel.YCxCz2XYZ().XYZ2LinearRGB().min(1.0f).max(0.0f).LinearRGB2XYZ().XYZ2CIELab();
@@ -579,14 +586,7 @@ void image::preprocessVec(std::pair<std::vector<color3>,std::vector<color3> >& f
         pixel.z = Hunt(pixel.x, pixel.z);
         this->mPixels[i]=pixel;
     }
-    
-    
-/*
-    *this=outputImage1+outputImage2; 
-    for (auto& pixel : this->mPixels)
-        pixel.YCxCz2XYZ().XYZ2LinearRGB().min(1.0f).max(0.0f).LinearRGB2XYZ().XYZ2CIELab();
-
-    huntAdjustment();*/
+    }
     
 }
 
@@ -610,31 +610,29 @@ void image::computeColorDifference(image& preprocessedReference, image& preproce
     const float pccmax = gpc * cmax;
 
     // compute difference in HyAB and redistribute errors
-    for (int y = 0; y < this->mHeight; y++)
+    #pragma omp parallel for
+    for (int i = 0; i < this->mPixels.size(); i++)
     {
-        for (int x = 0; x < this->mWidth; x++)
+        color3 refPixel = preprocessedReference.mPixels[i];
+        color3 testPixel = preprocessedTest.mPixels[i];
+        float error = HyAB(refPixel, testPixel);
+
+        error = powf(error, gqc);
+
+        // Re-map error to the [0, 1] range. Values between 0 and pccmax are mapped to the range [0, gpt],
+        // while the rest are mapped to the range (gpt, 1]
+        if (error < pccmax)
         {
-            // compute difference in HyAB
-            color3 refPixel = preprocessedReference.get(x, y);
-            color3 testPixel = preprocessedTest.get(x, y);
-            float error = HyAB(refPixel, testPixel);
-
-            error = powf(error, gqc);
-
-            // Re-map error to the [0, 1] range. Values between 0 and pccmax are mapped to the range [0, gpt],
-            // while the rest are mapped to the range (gpt, 1]
-            if (error < pccmax)
-            {
-                error *= gpt / pccmax;
-            }
-            else
-            {
-                error = gpt + ((error - pccmax) / (cmax - pccmax)) * (1.0f - gpt);
-            }
-
-            this->set(x, y, color3(error, 0.0f, 0.0f));
+            error *= gpt / pccmax;
         }
+        else
+        {
+            error = gpt + ((error - pccmax) / (cmax - pccmax)) * (1.0f - gpt);
+        }
+
+        this->mPixels[i] = color3(error, 0.0f, 0.0f);
     }
+    
 }
 
 void image::generateDetectionFilters(const float ppd, const bool pointDetector)
@@ -760,29 +758,33 @@ void image::computeFeatureDifference(image& refImage, image& testImage, const fl
     std::vector<color3> U_edgeVec,V_edgeVec;
     std::vector<color3> U_pointVec,V_pointVec;    
     
-    //#pragma omp parallel num_threads(1)
+    #pragma omp parallel num_threads(4)
     {
 
-    //#pragma omp single nowait
+    #pragma omp single nowait
     {this->allocate(refImage.mWidth, testImage.mHeight);}
-    //#pragma omp single nowait
+    #pragma omp single nowait
     {refGray.allocate(refImage.mWidth, testImage.mHeight);}
-    //#pragma omp single nowait
+    #pragma omp single nowait
     {testGray.allocate(refImage.mWidth, testImage.mHeight);}
-    //#pragma omp single nowait
+    #pragma omp single nowait
     {edgesReference.allocate(this->mWidth, this->mHeight);}
-    //#pragma omp single nowait
+    #pragma omp single nowait
     {pointsReference.allocate(this->mWidth, this->mHeight);}
-    //#pragma omp single nowait
+    #pragma omp single nowait
     {edgesTest.allocate(this->mWidth, this->mHeight);}
-    //#pragma omp single nowait
+    #pragma omp single nowait
     {pointsTest.allocate(this->mWidth, this->mHeight);}
-    //#pragma omp single nowait
+    #pragma omp single nowait
     {std::tie(U_edgeVec,V_edgeVec) = generateDetectionFiltersVec(ppd,false);}
-    //#pragma omp single nowait
+    #pragma omp single nowait
     {std::tie(U_pointVec,V_pointVec) = generateDetectionFiltersVec(ppd,true);}
     // make copy of ref and test images and extract and normalize achromatic component
     
+    {
+		#pragma omp barrier
+	}
+    #pragma omp for
     for (int i = 0; i < refGray.mPixels.size();i++)
     {
         float c = (refImage.mPixels[i].x + 16.0f) / 116.0f;   // make it [0,1]
@@ -791,32 +793,50 @@ void image::computeFeatureDifference(image& refImage, image& testImage, const fl
         c = (testImage.mPixels[i].x + 16.0f) / 116.0f;   // make it [0,1]
         testGray.mPixels[i] = color3(c, c, 0.0f);             // luminance [0,1] stored in both x and y since we apply both horizontal and verticals filters at the same time   
     }
+    {
+		#pragma omp barrier
+	}
+
+    #pragma omp single nowait
+    {
     convolve2DSeparable3ChannelsVec( refGray.mPixels,       edgesReference.mPixels, 
                                 refGray.mWidth,             refGray.mHeight, 
                                 U_edgeVec,                  U_edgeVec.size(),
                                 V_edgeVec,                  V_edgeVec.size()
                                 );
-    
+    }
+    #pragma omp single nowait
+    {
     convolve2DSeparable3ChannelsVec( testGray.mPixels,      edgesTest.mPixels, 
                                 testGray.mWidth,            testGray.mHeight,
                                 U_edgeVec,                  U_edgeVec.size(),
                                 V_edgeVec,                  V_edgeVec.size()
                                 );
-    
+    }
+    #pragma omp single nowait
+    {
     convolve2DSeparable3ChannelsVec( refGray.mPixels,       pointsReference.mPixels, 
                                 refGray.mWidth,             refGray.mHeight, 
                                 U_pointVec,                 U_pointVec.size(),
                                 V_pointVec,                 V_pointVec.size()
                                 );
-
+    }
+    #pragma omp single nowait
+    {
     convolve2DSeparable3ChannelsVec( testGray.mPixels,      pointsTest.mPixels, 
                                 testGray.mWidth,            testGray.mHeight, 
                                 U_pointVec,                 U_pointVec.size(),
                                 V_pointVec,                 V_pointVec.size()
                                 );
-
+    }
+    
     const float normalizationFactor = 1.0f / sqrtf(2.0f);
     
+    {
+        #pragma omp barrier
+    }
+    
+    #pragma omp for
     for(int i = 0; i < edgesReference.mPixels.size(); i++)
     {
         color3 p = edgesReference.mPixels[i];
@@ -836,100 +856,115 @@ void image::computeFeatureDifference(image& refImage, image& testImage, const fl
         this->mPixels[i]=color3(featureDifference, 0.0f, 0.0f);
     }
     }
-    /*
-    color3 p;
-    for (int y = 0; y < this->mHeight; y++)
-    {
-        for (int x = 0; x < this->mWidth; x++)
-        {
-            p = edgesReference.get(x, y);
-            const float edgeValueRef = sqrtf(p.x * p.x + p.y * p.y);
-            p = edgesTest.get(x, y);
-            const float edgeValueTest = sqrtf(p.x * p.x + p.y * p.y);
-            p = pointsReference.get(x, y);
-            const float pointValueRef = sqrtf(p.x * p.x + p.y * p.y);
-            p = pointsTest.get(x, y);
-            const float pointValueTest = sqrtf(p.x * p.x + p.y * p.y);
-
-            const float edgeDifference = std::abs(edgeValueRef - edgeValueTest);
-            const float pointDifference = std::abs(pointValueRef - pointValueTest);
-
-            const float featureDifference = std::pow(normalizationFactor * std::max(edgeDifference, pointDifference), gqf);
-
-            this->set(x, y, color3(featureDifference, 0.0f, 0.0f));
-        }
-    }*/
-    
-    
 }
 
 void image::computeFLIPError(image& refImage, image& testImage, bool verbose)
 {
     // Transform refImage and testImage to YCxCz opponent space
-    std::chrono::time_point<std::chrono::system_clock> start; 
-    start=std::chrono::system_clock::now();
+    std::chrono::time_point<std::chrono::system_clock> start,start1,start2,start3,start4,start5,start6;
     //images have to be of same size, so we can do both at once
-    //#pragma omp parallel for
+    image preprocessedReference;
+    image preprocessedTest;
+    image featureDifference;
+    image colorDifference;
+
+    std::chrono::duration<double> total;
+
+    start=std::chrono::system_clock::now();
+
+    #pragma omp parallel
+    { 
+    #pragma omp single nowait
+    {this->allocate(testImage.mWidth, testImage.mHeight);}
+
+    start2=std::chrono::system_clock::now(); 
+    #pragma omp for
     for(int i = 0; i<refImage.mHeight*refImage.mWidth; i++)
     {
         refImage.mPixels[i].sRGB2LinearRGB().LinearRGB2XYZ().XYZ2YCxCz();
         testImage.mPixels[i].sRGB2LinearRGB().LinearRGB2XYZ().XYZ2YCxCz();
     }
-    std::chrono::duration<double> transform_YCxCz = std::chrono::system_clock::now()-start;
+    {
+        #pragma omp barrier
+    }
+    transform_YCxCz = std::chrono::system_clock::now()-start2;
 
-    // Color pipeline
-    // Preprocess images
-    image preprocessedReference = refImage;
-    image preprocessedTest = testImage;
-    image filter;
+    #pragma omp single nowait
+    {  
+        featureDifference.computeFeatureDifference(refImage, testImage, gPPD);
+
+    }
     
-    auto filvec=generateSpatialFilterVec(gPPD);
-    
-    preprocessedReference.preprocessVec(filvec);
-    
-    preprocessedTest.preprocessVec(filvec);
-    
-       std::chrono::duration<double> preprocess = std::chrono::system_clock::now()-start;
-    if (verbose) std::cout << "ok.\nComputing error map..." << std::flush;
+    #pragma omp single nowait
+    {   
+        preprocessedReference = refImage;    
+        auto filvec=generateSpatialFilterVec(gPPD); 
+        preprocessedReference.preprocessVec(filvec);
+    }
+
+    #pragma omp single nowait
+    {  
+        preprocessedTest = testImage;
+        auto filvec=generateSpatialFilterVec(gPPD); 
+        preprocessedTest.preprocessVec(filvec);
+    }
+    {
+        #pragma omp barrier
+    }
+    #pragma omp single
+    {
+    colorDifference.computeColorDifference(preprocessedReference, preprocessedTest);
+;}
 
     // Compute color difference
-        start = std::chrono::system_clock::now();
-    image colorDifference;
-    colorDifference.computeColorDifference(preprocessedReference, preprocessedTest);
-        std::chrono::duration<double> colorDiff = std::chrono::system_clock::now()-start;
-
-    // Feature pipeline
-        start=std::chrono::system_clock::now();
-    image featureDifference;
-    featureDifference.computeFeatureDifference(refImage, testImage, gPPD);
-        std::chrono::duration<double> featureDiff = std::chrono::system_clock::now()-start;
-    
     // Final error
-        start=std::chrono::system_clock::now();
-    this->allocate(colorDifference.mWidth, colorDifference.mHeight);
-    for (int y = 0; y < this->mHeight; y++)
+    #pragma omp for
+    for(int i =0; i<this->mPixels.size(); i++)
     {
-        for (int x = 0; x < this->mWidth; x++)
-        {
-            const float cdiff = colorDifference.get(x, y).x;
-            const float fdiff = featureDifference.get(x, y).x;
+            const float cdiff = colorDifference.mPixels[i].x;
+            const float fdiff = featureDifference.mPixels[i].x;
             const float errorFLIP = std::pow(cdiff, 1.0f - fdiff);
-            this->set(x, y, color3(errorFLIP, errorFLIP, errorFLIP));
-        }
+            this->mPixels[i] = color3(errorFLIP, errorFLIP, errorFLIP);
     }
-        std::chrono::duration<double> finalError = std::chrono::system_clock::now()-start;
-    
-    std::ofstream f;
+    }
+
+    total = std::chrono::system_clock::now()-start;
+    /*std::ofstream f;
     f.open("opti.csv",std::ios_base::app);
-    f << 0  << ","
-        << transform_YCxCz.count() << ","
-        << preprocess.count() << ","
-        << colorDiff.count() << ","
-        << featureDiff.count() << ","
-        << finalError.count() << "\n";
-    f.close();
+    f << 10  << 
+        << total.count() << "\n";
+    f.close();*/
+    std::cout << "total time: " << total.count() << "s" << std::endl;
+
 }
 
+std::vector<std::array<float, 3> > computeFLIP(
+        std::vector<std::array<float, 3> >& refImage, 
+        std::vector<std::array<float, 3> >& testImage, 
+        const int w, const int h, 
+        const float gMonitorDistance = 0.7f,
+        const float gMonitorResolutionX = 3840.0f,
+        const float gMonitorWidth = 0.7f)
+ {
+    image ref,test;
+    ref.mHeight = h;ref.mWidth = w; 
+    test.mHeight = h;test.mWidth = w;
+    
+    ref.mPixels.resize(w*h);
+    test.mPixels.resize(w*h);
+    memcpy(ref.mPixels.data(), refImage.data(), refImage.size()*sizeof(std::array<float,3>) );
+    memcpy(test.mPixels.data(), testImage.data(), testImage.size()*sizeof(std::array<float,3>) );
+
+    gPPD = calculatePPD(gMonitorDistance,gMonitorResolutionX,gMonitorWidth);
+
+    image errorMap;
+    errorMap.computeFLIPError(ref,test,false);
+    std::vector<std::array<float, 3> > res;
+    res.resize(w*h);
+    memcpy(res.data(), errorMap.mPixels.data(), errorMap.mPixels.size()*sizeof(std::array<float,3>) );
+
+    return res;
+}
 
 
 //pooling& handlePooling(image& img, float ppd, const std::string fileName, const bool verbose, const bool optionLog, const std::string referenceFileName, const std::string testFileName)
@@ -1015,7 +1050,6 @@ static const color3 magmaMap[256] = {
 
 void image::remapToMagma()
 {
-    printf("test");
     for (auto& pixel : mPixels)
     {
         int index = int(std::min(std::max(pixel.x, 0.0f), 1.0f) * 255.0f);
