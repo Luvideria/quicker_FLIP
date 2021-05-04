@@ -1,5 +1,3 @@
-//THIS IS COLORCHECK.CPP
-
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -40,6 +38,9 @@ class color3
 public:
     color3() { x = 0.0f; y = 0.0f; z = 0.0f; }
     color3(const float v) { x = v; y = v; z = v; }
+    color3(const float* v) {x = v[0]; y = v[1]; z = v[2];}
+    color3(const std::vector<float> v) {x = v[0]; y = v[1]; z = v[2];}
+    color3(const std::array<float, 3> v) {x = v[0]; y = v[1]; z = v[2];}
     color3(const float _x, const float _y, const float _z) { x = _x; y = _y; z = _z; }
     color3 operator+(const color3& c)const{ return {x + c.x, y + c.y, z + c.z}; }
     color3 operator*(const color3& c)const{ return {x * c.x, y * c.y, z * c.z}; }
@@ -312,6 +313,7 @@ class image
 public:
     image()             { mWidth = 0; mHeight = 0; }
     image(const int width, const int height) { allocate(width, height); }
+
     image operator+(const image& im){   image temp= im;
     if(im.mPixels.size()!=this->mPixels.size())
         return image();
@@ -347,6 +349,7 @@ public:
     int                 mWidth = 0;
     int                 mHeight = 0;
     std::vector<color3> mPixels;
+    
 };
 
 bool image::load(const char* filename)
@@ -853,7 +856,6 @@ void image::computeFeatureDifference(image& refImage, image& testImage, const fl
         this->mPixels[i]=color3(featureDifference, 0.0f, 0.0f);
     }
     }
-
 }
 
 void image::computeFLIPError(image& refImage, image& testImage, bool verbose)
@@ -947,6 +949,48 @@ void image::computeFLIPError(image& refImage, image& testImage, bool verbose)
     f.close();
 
 }
+
+std::vector<std::array<float, 3> > computeFLIP(
+        std::vector<std::array<float, 3> >& refImage, 
+        std::vector<std::array<float, 3> >& testImage, 
+        const int w, const int h, 
+        const float gMonitorDistance = 0.7f,
+        const float gMonitorResolutionX = 3840.0f,
+        const float gMonitorWidth = 0.7f)
+ {
+    image ref,test;
+    ref.mHeight = h;ref.mWidth = w; 
+    test.mHeight = h;test.mWidth = w;
+    
+    ref.mPixels.resize(w*h);
+    test.mPixels.resize(w*h);
+    memcpy(ref.mPixels.data(), refImage.data(), refImage.size()*sizeof(std::array<float,3>) );
+    memcpy(test.mPixels.data(), testImage.data(), testImage.size()*sizeof(std::array<float,3>) );
+    /*for( int i = 0 ; i < w*h ; i++){  
+        ref.mPixels.push_back( refImage[i] );
+        test.mPixels.push_back( testImage[i] );    
+    }*/
+
+    gPPD = calculatePPD(gMonitorDistance,gMonitorResolutionX,gMonitorWidth);
+
+    image errorMap;
+    errorMap.computeFLIPError(ref,test,false);
+    std::vector<std::array<float, 3> > res;
+    res.resize(w*h);
+    memcpy(res.data(), errorMap.mPixels.data(), errorMap.mPixels.size()*sizeof(std::array<float,3>) );
+    /*
+    for( int i = 0 ; i < w*h ; i++){
+        std::array<float, 3> t;
+        t[0]=errorMap.mPixels[i].x;
+        t[1]=errorMap.mPixels[i].y;
+        t[2]=errorMap.mPixels[i].z;
+        
+        res.push_back(std::move(t));
+    }
+    */
+    return res;
+}
+
 
 //pooling& handlePooling(image& img, float ppd, const std::string fileName, const bool verbose, const bool optionLog, const std::string referenceFileName, const std::string testFileName)
 void handlePooling(image& image, pooling& pooling)
