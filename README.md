@@ -1,5 +1,7 @@
 https://research.nvidia.com/publication/2020-07_FLIP
 
+! This is not the new HDR variant !
+
 I am not the author of this algorithm. I only optimized it slightly (it can be further improved)
 This repository uses the same base file and modifies only minimally the function calls.
 
