@@ -23,7 +23,7 @@ I made both an optimized python and an optimized C++ version. The optimized C++ 
 ## Using the Python version:
 Simply copy the flipInPython directory somewhere you want to use it, then use the following import.
 
-``̀ 
+```
 from flipInPython.flip_opti import compute_flip_opti
 ```
 
