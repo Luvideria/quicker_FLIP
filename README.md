@@ -9,8 +9,6 @@ Python bindings are available and expose a single function: `computeFlip`.
 A Python implementation is also available.
 
 Please see testpy.py for an example.
-For performance reasons, the images to compare have to be in one large vector, and width and height have to be supplied.
-This allows a very straightforward and fast `memcpy`.
 
 Many loops have been parallelized and some merged.
 This implementation heavily relies on `#pragma omp single` to allow for concurrent tasks
@@ -18,13 +16,21 @@ This implementation heavily relies on `#pragma omp single` to allow for concurre
 ## Python Bindings and Python implementation:
 The NVidia team will present new code for HDR and LDR soon, I don't know if my implementation will become obsolete. In any case, it fits my use case well enough.
 
-There was both a Python and a C++ implementation. Surprisingly, they were both as bad in terms of performance (~6s per image in 1200x700).
+There was both a Python and a C++ implementation. Surprisingly, they were both as bad in terms of performance (~6s per image in 1200x700 on my machine).
 
 I made both an optimized python and an optimized C++ version. The optimized C++ is faster but its python bindings are slower. 
 
+## Using the Python version:
+Simply copy the flipInPython directory somewhere you want to use it, then use the following import.
+
+``̀ 
+from flipInPython.flip_opti import compute_flip_opti
+```
+
+Please see in the pytest.py the example for each solution. Note that the original python flip implementation is present too, for comparison.
 --- 
 # INSTALLATION for C++:
-You will need C++ 17, openMP support, `apt-get install pybind11`, or build pybind yourself
+You will need C++ 17 (i.e. a recent enough compiler version), openMP support, `apt-get install pybind11`, or build pybind yourself
 ```
 mkdir build
 cd build
