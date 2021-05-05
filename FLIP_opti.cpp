@@ -861,7 +861,7 @@ void image::computeFeatureDifference(image& refImage, image& testImage, const fl
 void image::computeFLIPError(image& refImage, image& testImage, bool verbose)
 {
     // Transform refImage and testImage to YCxCz opponent space
-    std::chrono::time_point<std::chrono::system_clock> start,start1,start2,start3,start4,start5,start6;
+    std::chrono::time_point<std::chrono::system_clock> start;
     //images have to be of same size, so we can do both at once
     image preprocessedReference;
     image preprocessedTest;
@@ -887,7 +887,6 @@ void image::computeFLIPError(image& refImage, image& testImage, bool verbose)
     {
         #pragma omp barrier
     }
-    transform_YCxCz = std::chrono::system_clock::now()-start2;
 
     #pragma omp single nowait
     {  
