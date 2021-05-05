@@ -877,7 +877,6 @@ void image::computeFLIPError(image& refImage, image& testImage, bool verbose)
     #pragma omp single nowait
     {this->allocate(testImage.mWidth, testImage.mHeight);}
 
-    start2=std::chrono::system_clock::now(); 
     #pragma omp for
     for(int i = 0; i<refImage.mHeight*refImage.mWidth; i++)
     {
