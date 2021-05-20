@@ -137,6 +137,7 @@ def linrgb2lab(input_color):
 
     transformed_color = np.concatenate((l, a, b), 0)
     return transformed_color
+
 def color_space_transform(input_color, fromSpace2toSpace):
     dim = input_color.shape
 
@@ -424,6 +425,7 @@ def make_feature_detection_vectors(pixels_per_degree, feature_type):
     u=Gx
     v=g
     return u,v
+from time import time
 
 def compute_flip(reference, test, pixels_per_degree):
     assert reference.shape == test.shape
@@ -431,13 +433,17 @@ def compute_flip(reference, test, pixels_per_degree):
     # Set color and feature exponents
     qc = 0.7
     qf = 0.5
-    times=list()
+    times=dict()
     # Transform reference and test to opponent color space
-    
-    with Pool(8) as p:
+    def tim(timerName): 
+        end=time() 
+        times[timerName]=end-start
+        return time()
+    with Pool() as p:
     #if True:
-        
-        reference, test = p.map(srgb2ycxcz, [reference, test])
+        start = time()
+        reference, test = p.map(srgb2ycxcz, [reference,test])
+        start=tim("firstColorTransform")
         
     #reference = color_space_transform(reference, 'srgb2ycxcz')
     #test = color_space_transform(test, 'srgb2ycxcz')
@@ -452,17 +458,19 @@ def compute_flip(reference, test, pixels_per_degree):
         masks = (s_a[1]==0.).all(), (s_rg[1]==0.).all(), (s_by[1]==0.).all()
 
         params = make_spatial_filter_parameters(reference, test, s_a, s_rg, s_by, masks)
+        start=tim("initSpatialFilter")
         table = p.map(laConvo1D, params)
-    
+        start=tim("convSpatialFilter")
         ref_ycxcz, test_ycxcz = get_spatial_filter_results(table, masks, dim)
+        start=tim("getResultsSpatialFilter")
         filtered_reference, filtered_test = p.map(ycxcz2linrgb_and_clip, [ref_ycxcz, test_ycxcz])
-
+        start=tim("spatialResultColorTransform")
         ###* END spatial filter reference END *###
-    
+        
     # Perceptually Uniform Color Space #
         param=[filtered_reference, filtered_test]
         preprocessed_reference, preprocessed_test = p.map(linrgb2lab_and_hunt,param) 
-
+        start=tim("preprocessColorSpace")
         #preprocessed_reference = hunt_adjustment(color_space_transform(filtered_reference, 'linrgb2lab'))
         #preprocessed_test = hunt_adjustment(color_space_transform(filtered_test, 'linrgb2lab'))
 
@@ -472,25 +480,26 @@ def compute_flip(reference, test, pixels_per_degree):
         hunt_adjusted_blue = hunt_adjustment(linrgb2lab(np.array([[[0.0]], [[0.0]], [[1.0]]])))
         cmax = np.power(hyab(hunt_adjusted_green, hunt_adjusted_blue), qc)
         deltaE_c = redistribute_errors(np.power(deltaE_hyab, qc), cmax)
-
+        start=tim("colorMetric")
     # --- Feature pipeline ---
     # Extract and normalize achromatic component
         reference_y = (reference[0:1, :, :] + 16) / 116
         test_y = (test[0:1, :, :] + 16) / 116
-
+        start=tim("extractNormalize")
     # Edge and point detection
-        
     # Edge and point kernels/vectors
         edge_u, edge_v = make_feature_detection_vectors( pixels_per_degree, 'edge' )
         point_u, point_v = make_feature_detection_vectors( pixels_per_degree, 'point' )
-
+        
         param=[ [reference_y[0], edge_u, edge_v], [reference_y[0], edge_v, edge_u],
                 [reference_y[0], point_u, point_v], [reference_y[0], point_v, point_u],
                 [test_y[0], edge_u, edge_v], [test_y[0], edge_v, edge_u],
                 [test_y[0], point_u, point_v], [test_y[0], point_v, point_u]]
-           
+        start=tim("makeFeatureVectorsAndParams")   
         reslist = p.map(laConvo1D, param)
+        start=tim("convFeatureDetection")
         edges_reference,points_reference,edges_test,points_test = [np.stack(reslist[i:i+2]) for i in range(0,len(reslist), 2) ]
+        start=tim("stackElements")
         #edges_reference = feature_detection(reference_y, pixels_per_degree, 'edge')
         #points_reference = feature_detection(reference_y, pixels_per_degree, 'point')
         #edges_test = feature_detection(test_y, pixels_per_degree, 'edge')
@@ -498,14 +507,18 @@ def compute_flip(reference, test, pixels_per_degree):
         
         param = [edges_reference, edges_test, points_test, points_reference]
         normiz = partial(np.linalg.norm, axis=0)
-        norms = p.map(normiz, param)
+        norms = list(p.map(normiz, param))
+        start=tim("normComputation")
     p.close()
     p.join()
+
     # Feature metric
     deltaE_f = np.maximum(abs(norms[0] - norms[1]), abs(norms[2] - norms[3]))
     #deltaE_f = np.maximum(abs(np.linalg.norm(edges_reference, axis=0) - np.linalg.norm(edges_test, axis=0)), abs(np.linalg.norm(points_test, axis=0) - np.linalg.norm(points_reference, axis=0)))
     deltaE_f = np.power(((1 / np.sqrt(2)) * deltaE_f), qf)
     
-    
     # --- Final error ---
-    return np.power(deltaE_c, 1 - deltaE_f)
+    error = np.power(deltaE_c, 1 - deltaE_f)
+    start=tim("finalError")
+    #print(times)
+    return error
