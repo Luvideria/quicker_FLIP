@@ -1,3 +1,8 @@
+## THIS IS OUTDATED
+This repo has been created before the new improvements provided by the team at Nvidia.
+The contribution of this repo has been acknowledged by the original authors:
+https://github.com/NVlabs/flip/blob/main/misc/separatedConvolutions.pdf
+
 https://research.nvidia.com/publication/2020-07_FLIP
 
 ! This is not the new HDR variant !
